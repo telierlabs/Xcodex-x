@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Foto Scanner</title>
+<style>
+body{font-family:sans-serif;background:#111;color:#eee;margin:0;padding:16px}
+button,label.btn{display:block;width:100%;padding:14px;margin:8px 0;background:#2d7ff9;color:#fff;border:0;border-radius:10px;font-size:16px;text-align:center;box-sizing:border-box}
+input[type=file]{display:none}
+#info{margin:10px 0;color:#9cf}
+#grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+#grid div{position:relative;background:#222;aspect-ratio:1;overflow:hidden;border-radius:6px}
+#grid img{width:100%;height:100%;object-fit:cover}
+#grid a{position:absolute;bottom:2px;right:2px;background:#000a;color:#fff;font-size:11px;padding:2px 5px;border-radius:4px;text-decoration:none}
+small{color:#999}
+</style>
+</head>
+<body>
+<h2>Foto Scanner</h2>
+<small>Scan folder di HP lu, cari semua gambar yang masih ada, termasuk thumbnail dan sisa file.</small>
+
+<label class="btn">Pilih folder (scan semua isi)
+<input id="dir" type="file" webkitdirectory multiple></label>
+<label class="btn" style="background:#555">Pilih file manual (bisa banyak)
+<input id="files" type="file" multiple accept="*/*"></label>
+<button id="save" style="background:#1a9c5a;display:none">Simpan semua yang ketemu</button>
+
+<div id="info"></div>
+<div id="grid"></div>
+
+<script>
+const found=[];
+const grid=document.getElementById('grid'),info=document.getElementById('info'),saveBtn=document.getElementById('save');
+
+// cek signature asli (bukan cuma ekstensi), jadi file tanpa ekstensi / .thumbdata / cache tetap ketemu
+async function sniff(file){
+  const buf=new Uint8Array(await file.slice(0,12).arrayBuffer());
+  if(buf[0]==0xFF&&buf[1]==0xD8&&buf[2]==0xFF)return'image/jpeg';
+  if(buf[0]==0x89&&buf[1]==0x50&&buf[2]==0x4E&&buf[3]==0x47)return'image/png';
+  if(buf[0]==0x47&&buf[1]==0x49&&buf[2]==0x46)return'image/gif';
+  if(buf[0]==0x52&&buf[1]==0x49&&buf[2]==0x46&&buf[3]==0x46&&buf[8]==0x57&&buf[9]==0x45)return'image/webp';
+  if(buf[4]==0x66&&buf[5]==0x74&&buf[6]==0x79&&buf[7]==0x70)return'image/heic';
+  return null;
+}
+
+// carving: file besar (misal .thumbdata, cache) yang isinya banyak JPEG gabungan
+async function carveJPEGs(file){
+  const data=new Uint8Array(await file.arrayBuffer());
+  const out=[];let i=0;
+  while(i<data.length-3){
+    if(data[i]==0xFF&&data[i+1]==0xD8&&data[i+2]==0xFF){
+      let j=i+3,end=-1;
+      while(j<data.length-1){if(data[j]==0xFF&&data[j+1]==0xD9){end=j+2;break}j++}
+      if(end>0&&end-i>2000){out.push(new Blob([data.slice(i,end)],{type:'image/jpeg'}));i=end;continue}
+    }
+    i++;
+  }
+  return out;
+}
+
+function add(blob,name){
+  found.push({blob,name});
+  const url=URL.createObjectURL(blob);
+  const d=document.createElement('div');
+  d.innerHTML=`<img src="${url}"><a href="${url}" download="${name}">simpan</a>`;
+  grid.appendChild(d);
+}
+
+async function scan(list){
+  info.textContent='Scanning '+list.length+' file...';
+  let n=0;
+  for(const f of list){
+    try{
+      const t=await sniff(f);
+      if(t){add(f.slice(0,f.size,t),(f.name||'foto')+(f.name.includes('.')?'':'.jpg'));}
+      else if(f.size>5000&&f.size<300*1024*1024&&/thumb|cache|data|tmp|bin|dat/i.test(f.name)){
+        const parts=await carveJPEGs(f);
+        parts.forEach((b,k)=>add(b,f.name+'_'+k+'.jpg'));
+      }
+    }catch(e){}
+    n++;
+    if(n%50==0)info.textContent='Scan '+n+'/'+list.length+' | ketemu '+found.length;
+  }
+  info.textContent='Selesai. Ketemu '+found.length+' gambar.';
+  if(found.length)saveBtn.style.display='block';
+}
+
+document.getElementById('dir').onchange=e=>scan([...e.target.files]);
+document.getElementById('files').onchange=e=>scan([...e.target.files]);
+saveBtn.onclick=()=>{
+  found.forEach((f,i)=>{
+    setTimeout(()=>{const a=document.createElement('a');a.href=URL.createObjectURL(f.blob);a.download=(i+1)+'_'+f.name;a.click()},i*300);
+  });
+};
+</script>
+</body>
+</html>
